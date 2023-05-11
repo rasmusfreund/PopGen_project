@@ -36,22 +36,48 @@ Suggestions for further analysis:
 
 Stuff done:
 
-## Removed individuals with elevated LD
-
-```bash
-plink --bfile gwas_data --indep 50 5 2 --allow-no-sex --out gwas_QC_LD
-plink --bfile gwas_data --remove gwas_QC_LD.hh --make-bed --out gwas_QC
-```
-
 ## Removed individuals with missing data or outlying heterozygosity
+```bash
+plink --bfile gwas_data --missing --out GWAS_QC
+```
 
-DO THIS: plink --bfile gwas_data --genome --out gwas_QC_IBD
+```r  
+d_miss <- read.table("gwas_QC.imiss", header = T)
+d_het <- read.table("gwas_QC.het", header = T)
+d <- inner_join(d_miss, d_het)
+d <- left_join(d, metadata, by = "IID")
 
+d %>% 
+  mutate(O.HET = (N.NM. - O.HOM.) / N.NM.) -> d
+  
+d %>% 
+  filter(F_MISS >= 0.95 | 
+         O.HET > mean(O.HET) + 3 * sd(O.HET) |
+         O.HET < mean(O.HET) - 3 * sd(O.HET)) %>% 
+  select(FID, IID) -> wrong_missing
+write.table(wrong_missing, file = "wrong_missing.txt", col.names = F, row.names = F)
+```
 
 ```bash
-plink --bfile gwas_data --missing --allow-no-sex --out gwas_QC
-plink --bfile gwas_data --het --allow-no-sex --out gwas_QC
-
-
+plink --bfile gwas_data --remove wrong_missing.txt --allow-no-sex --make-bed --out GWAS_QC_rm
 ```
+
+## Identity by descent 
+
+```bash
+plink --bfile GWAS_QC_rm --genome --min 0.185 --out GWAS_QC_IBD
+```
+
+```r
+ibd <- read.table('GWAS_QC_IBD.genome', header = TRUE)
+members <- ibd$FID1
+members <- unique(members)
+write.table(cbind(members,members), file = 'wrong_ibd.txt', col.names = F, row.names = F)
+```
+
+```bash
+plink --bfile GWAS_QC_rm --remove wrong_ibd.txt --make-bed --out GWAS_QC_rm_ibd
+```
+
+
 
