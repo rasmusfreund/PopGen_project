@@ -11,11 +11,10 @@ In this project you will be looking at GWAS data from [openSNP](https://opensnp.
 ## Investigate the following
 
 A. Are there any closely related individuals in the sample?
-
-
-
+319 identified individuals have been removed due to close relatedness
 
 B. Do a PCA plot. What does it tell you about the samples?
+
 
 C. The files eye_color.txt and height.txt contains the self-reported eye color and height for the individuals in the data. Do a GWAS on one these traits. There are 12 eye color categories and you can group some of them together to create a binary phenotype. How many significant loci do you find?
 
@@ -78,6 +77,53 @@ write.table(cbind(members,members), file = 'wrong_ibd.txt', col.names = F, row.n
 ```bash
 plink --bfile GWAS_QC_rm --remove wrong_ibd.txt --make-bed --out GWAS_QC_rm_ibd
 ```
+
+## PCA
+
+```bash
+plink --bfile GWAS_QC_rm_ibd --pca 20 --out GWAS_pca
+```
+
+```r
+pca <- read.table("GWAS_pca.eigenvec")
+
+ggplot(data = pca, aes(x = V3, y = V4)) +
+  geom_point()
+
+pca %>% 
+  filter(V4 < - .10) -> pca_outliers
+
+write.table(cbind(pca_outliers$V1, pca_outliers$V2), file = "pca_outliers.txt", col.names = F, row.names = F)
+```
+
+```bash
+plink --bfile GWAS_QC_rm_ibd --remove pca_outliers.txt --make-bed --out GWAS_QC_rm_ibd_pca
+```
+
+```r
+pca <- read.table("GWAS_pca_rm-outliers.eigenvec")
+
+ggplot(data = pca, aes(x = V3, y = V4)) +
+  geom_point()
+  
+# Eigenvalues
+ggplot(data = eigenvals) +
+  geom_col(aes(x = 1:20, y = V1)) +
+  labs(x = "PC",
+       y = "Explained variance") +
+  scale_x_continuous(breaks = 1:20) +
+  theme_pander()
+
+# Cumulative sum of eigenvalues
+ggplot(data = eigenvals) +
+  geom_point(aes(x = 1:20, y = cumsum(V1))) +
+  labs(x = "PC",
+       y = "Cumulative sum") + 
+  scale_x_continuous(breaks = 1:20) +
+  scale_y_continuous(limits = c(0, 100)) +
+  theme_pander()
+```
+
 
 
 
