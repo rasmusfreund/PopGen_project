@@ -1,0 +1,278 @@
+---
+title: "GWAS"
+author: "Rasmus Freund"
+date: "2023-05-04"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, dev="CairoPNG")
+```
+
+
+```{r}
+library(tidyverse)
+library(ggthemes)
+```
+
+```{r}
+metadata <- read.table("data/metadata.txt", header = T, sep = "\t")
+# Filtered
+
+metadata <- metadata %>% 
+  select(c(user, chip, inferred_sex, source)) %>% 
+  rename(IID = user)
+
+metadata$IID <- as.integer(metadata$IID)
+
+metadata <- metadata %>% 
+  filter(IID != is.na(metadata$IID))
+
+# Formating for t-test; diff between 23andMe and others
+metadata %>% 
+  mutate(bin_source = ifelse(grepl("23andme", source, ignore.case = TRUE), TRUE, FALSE)) -> metadata
+
+metadata %>% 
+  group_by(bin_source) %>% 
+  summarise(n = n())
+
+metadata %>% 
+  filter(!(source %in% "23andMe")) %>% 
+  select(IID) -> wrong_company
+
+write.table(cbind(wrong_company, wrong_company), file = "data/wrong_company.txt", row.names = F, col.names = F)
+
+```
+
+
+
+```{r}
+d_miss <- read.table("data/gwas_QC.imiss", header = T)
+d_het <- read.table("data/gwas_QC.het", header = T)
+d <- inner_join(d_miss, d_het)
+d <- left_join(d, metadata, by = "IID")
+d
+
+# Calculate observed heterozygosity rate
+
+d %>% 
+  mutate(O.HET = (N.NM. - O.HOM.) / N.NM.) -> d
+
+ggplot() +
+  geom_point(aes(x = d$O.HET, y = d$F_MISS, color = d$source)) +
+  theme_clean() +
+  theme(legend.position = "none") +
+  labs(x = "Observed heterozygosity rate",
+       y = "Proportion of missing SNPs")
+
+```
+
+```{r}
+# Find outliers
+
+d %>% 
+  filter(F_MISS >= 0.95 | 
+         O.HET > mean(O.HET) + 3 * sd(O.HET) |
+         O.HET < mean(O.HET) - 3 * sd(O.HET)) %>% 
+  select(FID, IID) -> wrong_missing
+write.table(wrong_missing, file = "data/wrong_missing.txt", col.names = F, row.names = F)
+
+
+```
+
+```{r}
+ibd <- read.table('data/GWAS_QC_IBD.genome', header = TRUE)
+members <- ibd$FID1
+members <- unique(members)
+write.table(cbind(members,members), file = 'data/wrong_ibd.txt', col.names = F, row.names = F)
+```
+
+```{r, warning = FALSE}
+pca <- read.table("data/GWAS_pca.eigenvec")
+
+ggplot(data = pca, aes(x = V3, y = V4)) +
+  geom_point() +
+  geom_label(aes(label = ifelse(V4 < -.10, V1, NA)), nudge_x = .015) +
+  theme_clean() +
+  labs(x = "PC1",
+       y = "PC2")
+
+pca %>% 
+  filter(V4 < - .10) -> pca_outliers
+
+write.table(cbind(pca_outliers$V1, pca_outliers$V2), file = "pca_outliers.txt", col.names = F, row.names = F)
+
+```
+
+```{r}
+pca <- read.table("data/GWAS_pca_rm-outliers.eigenvec")
+eigenvals <- read.table("data/GWAS_pca_rm-outliers.eigenval")
+
+pca %>% 
+  rename(IID = V1) -> pca 
+pca <- left_join(pca, metadata, by = "IID")
+
+
+# PCA - outliers removed
+ggplot(data = pca, aes(x = V3, y = V4, color = source)) +
+  geom_point() +
+  theme_pander() +
+  theme(legend.position = "none") +
+  labs(x = "PC1",
+       y = "PC2")
+
+# Eigenvalues
+ggplot(data = eigenvals) +
+  geom_col(aes(x = 1:20, y = V1), fill = "#234523") +
+  labs(x = "PC",
+       y = "Explained variance") +
+  scale_x_continuous(breaks = 1:20) +
+  theme_pander()
+
+# Cumulative sum of eigenvalues
+ggplot(data = eigenvals) +
+  geom_point(aes(x = 1:20, y = cumsum(V1))) +
+  labs(x = "PC",
+       y = "Cumulative sum") + 
+  scale_x_continuous(breaks = 1:20) +
+  scale_y_continuous(limits = c(0, 100)) +
+  theme_pander()
+
+```
+t-test (no LD pruning)
+
+```{r}
+set.seed(0)
+pca %>% 
+  rename(PC1 = V3,
+         PC2 = V4,
+         PC3 = V5) -> pca
+
+
+pca %>% 
+  select(!grep("V[0-9]+", colnames(pca))) -> pca_selected
+
+
+variance_test <- tibble(Groups = c("PC1", "PC2", "PC3"),
+                        P.value = c(
+                          var.test(pca_selected$PC1[pca_selected$bin_source == TRUE], pca_selected$PC1[pca_selected$bin_source == FALSE])$p.value,
+                          var.test(pca_selected$PC2[pca_selected$bin_source == TRUE], pca_selected$PC2[pca_selected$bin_source == FALSE])$p.value,
+                          var.test(pca_selected$PC3[pca_selected$bin_source == TRUE], pca_selected$PC3[pca_selected$bin_source == FALSE])$p.value))
+
+
+pca_selected %>% 
+  summarise(PC1 = t.test(PC1[pca_selected$bin_source == TRUE],
+                         PC1[pca_selected$bin_source == FALSE],
+                         alternative = "two.sided", 
+                         var.equal = ifelse(variance_test$P.value[variance_test$Groups == "PC1"] < 0.05, FALSE, TRUE))$p.value,
+            PC2 = t.test(PC2[pca_selected$bin_source == TRUE],
+                         PC2[pca_selected$bin_source == FALSE],
+                         alternative = "two.sided", 
+                         var.equal = ifelse(variance_test$P.value[variance_test$Groups == "PC2"] < 0.05, FALSE, TRUE))$p.value, 
+            PC3 = t.test(PC3[pca_selected$bin_source == TRUE],
+                         PC3[pca_selected$bin_source == FALSE],
+                         alternative = "two.sided", 
+                         var.equal = ifelse(variance_test$P.value[variance_test$Groups == "PC3"] < 0.05, FALSE, TRUE))$p.value)
+
+```
+
+## LD pruning done - redoing pca analysis
+```{r, warning = FALSE}
+pca <- read.table("data/GWAS_QC_rm_ibd_LD.eigenvec")
+
+ggplot(data = pca, aes(x = V3, y = V4)) +
+  geom_point() +
+  geom_label(aes(label = ifelse(V3 > .9 | V4 < -0.02, V1, NA)), nudge_y = .015) +
+  theme_clean() +
+  labs(x = "PC1",
+       y = "PC2")
+
+pca %>% 
+  filter(V3 > .9 | V4 < -0.02) -> pca_LD_outliers
+
+write.table(cbind(pca_LD_outliers$V1, pca_LD_outliers$V2), file = "pca_LD_outliers.txt", col.names = F, row.names = F)
+
+```
+
+```{r}
+pca <- read.table("data/GWAS_QC_rm_ibd_LD_pca.eigenvec")
+eigenvals <- read.table("data/GWAS_QC_rm_ibd_LD_pca.eigenval")
+
+pca %>% 
+  rename(IID = V1) -> pca 
+pca <- left_join(pca, metadata, by = "IID")
+
+
+# PCA - outliers removed
+ggplot(data = pca, aes(x = V3, y = V4, color = source)) +
+  geom_point() +
+  theme_pander() +
+  theme(legend.position = "none") +
+  labs(x = "PC1",
+       y = "PC2")
+
+# Eigenvalues
+ggplot(data = eigenvals) +
+  geom_col(aes(x = 1:20, y = V1), fill = "#234523") +
+  labs(x = "PC",
+       y = "Explained variance") +
+  scale_x_continuous(breaks = 1:20) +
+  theme_pander()
+
+# Cumulative sum of eigenvalues
+ggplot(data = eigenvals) +
+  geom_point(aes(x = 1:20, y = cumsum(V1))) +
+  labs(x = "PC",
+       y = "Cumulative sum") + 
+  scale_x_continuous(breaks = 1:20) +
+  scale_y_continuous(limits = c(0, 100)) +
+  theme_pander()
+
+```
+```{r}
+set.seed(0)
+pca %>% 
+  rename(PC1 = V3,
+         PC2 = V4,
+         PC3 = V5) -> pca
+
+
+pca %>% 
+  select(!grep("V[0-9]+", colnames(pca))) -> pca_selected
+
+
+variance_test <- tibble(Groups = c("PC1", "PC2", "PC3"),
+                        P.value = c(
+                          var.test(pca_selected$PC1[pca_selected$bin_source == TRUE], pca_selected$PC1[pca_selected$bin_source == FALSE])$p.value,
+                          var.test(pca_selected$PC2[pca_selected$bin_source == TRUE], pca_selected$PC2[pca_selected$bin_source == FALSE])$p.value,
+                          var.test(pca_selected$PC3[pca_selected$bin_source == TRUE], pca_selected$PC3[pca_selected$bin_source == FALSE])$p.value))
+
+
+pca_selected %>% 
+  summarise(PC1 = t.test(PC1[pca_selected$bin_source == TRUE],
+                         PC1[pca_selected$bin_source == FALSE],
+                         alternative = "two.sided", 
+                         var.equal = ifelse(variance_test$P.value[variance_test$Groups == "PC1"] < 0.05, FALSE, TRUE))$p.value,
+            PC2 = t.test(PC2[pca_selected$bin_source == TRUE],
+                         PC2[pca_selected$bin_source == FALSE],
+                         alternative = "two.sided", 
+                         var.equal = ifelse(variance_test$P.value[variance_test$Groups == "PC2"] < 0.05, FALSE, TRUE))$p.value, 
+            PC3 = t.test(PC3[pca_selected$bin_source == TRUE],
+                         PC3[pca_selected$bin_source == FALSE],
+                         alternative = "two.sided", 
+                         var.equal = ifelse(variance_test$P.value[variance_test$Groups == "PC3"] < 0.05, FALSE, TRUE))$p.value)
+
+
+```
+
+
+```{r}
+height <- read.table("data/height.txt", header = F)
+```
+
+
+
+
+
+
+

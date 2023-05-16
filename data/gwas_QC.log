@@ -1,0 +1,29 @@
+PLINK v1.90b6.21 64-bit (19 Oct 2020)
+Options in effect:
+  --allow-no-sex
+  --bfile gwas_data
+  --het
+  --out gwas_QC
+
+Hostname: s21n11
+Working directory: /faststorage/project/populationgenomics/students/delirra/GWAS
+Start time: Thu May  4 13:35:38 2023
+
+Random number seed: 1683200138
+515537 MB RAM detected; reserving 257768 MB for main workspace.
+1376653 variants loaded from .bim file.
+2009 people (992 males, 916 females, 101 ambiguous) loaded from .fam.
+Ambiguous sex IDs written to gwas_QC.nosex .
+Using 1 thread (no multithreaded calculations invoked).
+Before main variant filters, 2009 founders and 0 nonfounders present.
+Calculating allele frequencies... done.
+Warning: 106246 het. haploid genotypes present (see gwas_QC.hh ); many commands
+treat these as missing.
+Warning: Nonmissing nonmale Y chromosome genotype(s) present; many commands
+treat these as missing.
+Total genotyping rate is 0.478922.
+1376653 variants and 2009 people pass filters and QC.
+Note: No phenotypes present.
+--het: 1222787 variants scanned, report written to gwas_QC.het .
+
+End time: Thu May  4 13:35:43 2023
