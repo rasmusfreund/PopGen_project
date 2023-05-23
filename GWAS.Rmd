@@ -9,6 +9,32 @@ output: pdf_document
 knitr::opts_chunk$set(echo = TRUE, dev="CairoPNG")
 ```
 
+```{bash}
+#  Finding missing data
+plink --bfile data --missing --out new_data
+
+# Calculation of IBD
+plink --bfile data --genome --min 0.185 --out new_data
+
+# LD pruning
+plink --bfile data --indep-pairwise 500kb 5 0.2 --out new_data
+
+# Excluding pruned data (flag)
+--exlude data.prune.in
+
+# Calculating PCA
+plink --bfile data --pca 20 --out new_data
+
+# Removing filtered individuals (several steps)
+plink --bfile data --remove wrong_individuals.txt --make-bed --out new_data
+
+# Test for association
+plink --bfile data --assoc fisher --out new_data
+plink --bfile data --assoc fisher --adjust --out new_data
+
+# Adjusting for PCs
+plink --bfile data --linear --covar data.eigenvec --covar-number 1-2
+````
 
 ```{r}
 library(tidyverse)
