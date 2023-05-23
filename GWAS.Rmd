@@ -13,6 +13,7 @@ knitr::opts_chunk$set(echo = TRUE, dev="CairoPNG")
 ```{r}
 library(tidyverse)
 library(ggthemes)
+library(cowplot)
 ```
 
 ```{r}
@@ -36,11 +37,10 @@ metadata %>%
   group_by(bin_source) %>% 
   summarise(n = n())
 
-metadata %>% 
-  filter(!(source %in% "23andMe")) %>% 
-  select(IID) -> wrong_company
 
-write.table(cbind(wrong_company, wrong_company), file = "data/wrong_company.txt", row.names = F, col.names = F)
+metadata %>% 
+  group_by(source) %>% 
+  summarise(n = n())
 
 ```
 
@@ -112,12 +112,12 @@ pca %>%
   rename(IID = V1) -> pca 
 pca <- left_join(pca, metadata, by = "IID")
 
-
+pca
 # PCA - outliers removed
 ggplot(data = pca, aes(x = V3, y = V4, color = source)) +
   geom_point() +
+  geom_rug() +
   theme_pander() +
-  theme(legend.position = "none") +
   labs(x = "PC1",
        y = "PC2")
 
@@ -204,12 +204,39 @@ pca <- left_join(pca, metadata, by = "IID")
 
 
 # PCA - outliers removed
-ggplot(data = pca, aes(x = V3, y = V4, color = source)) +
+pca12 <- ggplot(data = pca, aes(x = V3, y = V4, color = bin_source)) +
   geom_point() +
+  geom_rug(show.legend = FALSE) +
   theme_pander() +
-  theme(legend.position = "none") +
+  scale_color_manual(values = c("darkorchid", "cornflowerblue"),
+                     name = "Company",
+                     labels = c("Other", "23andMe")) + 
   labs(x = "PC1",
-       y = "PC2")
+       y = "PC2") +
+  ggtitle("Before adjusting for \ncompany differences")
+
+pca13 <- ggplot(data = pca, aes(x = V3, y = V5, color = bin_source)) +
+  geom_point() +
+  geom_rug(show.legend = FALSE) +
+  theme_pander() +
+  scale_color_manual(values = c("darkorchid", "cornflowerblue"),
+                     name = "Company",
+                     labels = c("Other", "23andMe")) + 
+  labs(x = "PC1",
+       y = "PC3") +
+  ggtitle("B")
+
+pca23 <- ggplot(data = pca, aes(x = V4, y = V5, color = bin_source)) +
+  geom_point() +
+  geom_rug(show.legend = FALSE) +
+  theme_pander() +
+  scale_color_manual(values = c("darkorchid", "cornflowerblue"),
+                     name = "Company",
+                     labels = c("Other", "23andMe")) + 
+  labs(x = "PC2",
+       y = "PC3") +
+  ggtitle("C")
+
 
 # Eigenvalues
 ggplot(data = eigenvals) +
@@ -229,46 +256,321 @@ ggplot(data = eigenvals) +
   theme_pander()
 
 ```
+
 ```{r}
-set.seed(0)
-pca %>% 
-  rename(PC1 = V3,
-         PC2 = V4,
-         PC3 = V5) -> pca
-
+new_names <- paste0("PC", 1:20)
+colnames(pca)[3:22] <- new_names
 
 pca %>% 
-  select(!grep("V[0-9]+", colnames(pca))) -> pca_selected
+  select(c(grep("PC[0-9]+", colnames(pca)),
+           bin_source))-> pca_selected
+
+results_list <- list()
+
+for (i in 1:(ncol(pca_selected) - 1)) {
+  column_name <- colnames(pca_selected)[i]
+  true_vals <- pca_selected[pca_selected$bin_source == TRUE, column_name]
+  false_vals <- pca_selected[pca_selected$bin_source == FALSE, column_name]
+  
+  # Perform variance test
+  variance_test <- var.test(true_vals, false_vals)
+  
+  # Determine var.equal
+  var_equal <- ifelse(variance_test$p.value < 0.05, FALSE, TRUE)
+  
+  # Perform t-test
+  t_test <- t.test(true_vals, false_vals, alternative = "two.sided", var.equal = var_equal)
+  
+  # Store result
+  results_list[[column_name]] <- list(variance_test = variance_test, t_test = t_test)
+}
+
+p_values <- list()
+
+for (column_name in names(results_list)) {
+  t_test_result <- results_list[[column_name]]$t_test
+  p_value <- t_test_result$p.value
+  
+  p_values[[column_name]] <- p_value
+}
+
+p_values_df <- tibble(column = names(p_values),
+                      p_value = unlist(p_values))
+
+p_values_df$column <- factor(p_values_df$column, levels = paste0("PC", 1:20))
+
+company_diff <- ggplot(p_values_df, aes(x = column, y = -log10(p_value))) +
+  geom_bar(stat = "identity", fill = "darkblue") +
+  geom_hline(yintercept = -log10(0.05), color = "firebrick", linetype = 2) +
+  xlab("") +
+  labs(y = "-log10(P-value)") +
+  ggtitle("D") + 
+  theme(axis.text.x = element_text(angle = 50, vjust = 1, hjust = 1)) +
+  theme_pander()
 
 
-variance_test <- tibble(Groups = c("PC1", "PC2", "PC3"),
-                        P.value = c(
-                          var.test(pca_selected$PC1[pca_selected$bin_source == TRUE], pca_selected$PC1[pca_selected$bin_source == FALSE])$p.value,
-                          var.test(pca_selected$PC2[pca_selected$bin_source == TRUE], pca_selected$PC2[pca_selected$bin_source == FALSE])$p.value,
-                          var.test(pca_selected$PC3[pca_selected$bin_source == TRUE], pca_selected$PC3[pca_selected$bin_source == FALSE])$p.value))
+plot_grid(pca12, pca13, pca23, company_diff)
+ggsave2("company_diff.png", 
+        plot = ggplot2::last_plot(),
+        width = 9,
+        height = 6,
+        dpi = 300)
+
+```
+
+```{r}
+pca <- read.table("data/GWAS_QC_rm_ibd_LD_pca.eigenvec")
+
+pca %>% 
+  ggplot(aes(V1, abs(V5))) +
+  geom_point() +
+  geom_label(aes(label = ifelse(abs(V5) > 0.2, V1, NA))) +
+  theme_pander()
+
+pca %>% 
+  filter(abs(V5) > 0.2) %>% 
+  select(c(V1, V2)) -> wrong_pc3
+
+write.table(wrong_pc3, "data/wrong_pc3.txt", col.names = F, row.names = F)
+
+```
+
+Redo the whole thing with new pca
+```{r}
+pca <- read.table("data/GWAS_QC_rm_ibd_pc3.eigenvec")
+eigenvals <- read.table("data/GWAS_QC_rm_ibd_pc3.eigenval")
+
+pca %>% 
+  rename(IID = V1) -> pca 
+pca <- left_join(pca, metadata, by = "IID")
+
+pca_post <- ggplot(data = pca, aes(x = V3, y = V4, color = bin_source)) +
+  geom_point() +
+  geom_rug(show.legend = FALSE) +
+  theme_pander() +
+  scale_color_manual(values = c("darkorchid", "cornflowerblue"),
+                     name = "Company",
+                     labels = c("Other", "23andMe")) + 
+  labs(x = "PC1",
+       y = "PC2") +
+  ggtitle("After adjusting for\ncompany differences")
+
+prow <- plot_grid(pca12 + theme(legend.position = "none"), 
+                  pca_post + theme(legend.position = "none"))
+legend <- get_legend(pca_post + theme(legend.box.margin = margin(0, 0, 0, 12)))
+
+plot_grid(prow, legend, rel_widths = c(2, .4))
+ggsave2("pc12_diff.png", 
+        plot = ggplot2::last_plot(),
+        width = 9,
+        height = 6,
+        dpi = 300)
 
 
-pca_selected %>% 
-  summarise(PC1 = t.test(PC1[pca_selected$bin_source == TRUE],
-                         PC1[pca_selected$bin_source == FALSE],
-                         alternative = "two.sided", 
-                         var.equal = ifelse(variance_test$P.value[variance_test$Groups == "PC1"] < 0.05, FALSE, TRUE))$p.value,
-            PC2 = t.test(PC2[pca_selected$bin_source == TRUE],
-                         PC2[pca_selected$bin_source == FALSE],
-                         alternative = "two.sided", 
-                         var.equal = ifelse(variance_test$P.value[variance_test$Groups == "PC2"] < 0.05, FALSE, TRUE))$p.value, 
-            PC3 = t.test(PC3[pca_selected$bin_source == TRUE],
-                         PC3[pca_selected$bin_source == FALSE],
-                         alternative = "two.sided", 
-                         var.equal = ifelse(variance_test$P.value[variance_test$Groups == "PC3"] < 0.05, FALSE, TRUE))$p.value)
+# Eigenvalues
+ggplot(data = eigenvals) +
+  geom_col(aes(x = 1:20, y = V1), fill = "#234523") +
+  labs(x = "PC",
+       y = "Explained variance") +
+  scale_x_continuous(breaks = 1:20) +
+  theme_pander()
 
+new_names <- paste0("PC", 1:20)
+colnames(pca)[3:22] <- new_names
+
+pca %>% 
+  select(c(grep("PC[0-9]+", colnames(pca)),
+           bin_source))-> pca_selected
+
+results_list <- list()
+
+for (i in 1:(ncol(pca_selected) - 1)) {
+  column_name <- colnames(pca_selected)[i]
+  true_vals <- pca_selected[pca_selected$bin_source == TRUE, column_name]
+  false_vals <- pca_selected[pca_selected$bin_source == FALSE, column_name]
+  
+  # Perform variance test
+  variance_test <- var.test(true_vals, false_vals)
+  
+  # Determine var.equal
+  var_equal <- ifelse(variance_test$p.value < 0.05, FALSE, TRUE)
+  
+  # Perform t-test
+  t_test <- t.test(true_vals, false_vals, alternative = "two.sided", var.equal = var_equal)
+  
+  # Store result
+  results_list[[column_name]] <- list(variance_test = variance_test, t_test = t_test)
+}
+
+p_values <- list()
+
+for (column_name in names(results_list)) {
+  t_test_result <- results_list[[column_name]]$t_test
+  p_value <- t_test_result$p.value
+  
+  p_values[[column_name]] <- p_value
+}
+
+p_values_df <- tibble(column = names(p_values),
+                      p_value = unlist(p_values))
+
+p_values_df$column <- factor(p_values_df$column, levels = paste0("PC", 1:20))
+
+ggplot(p_values_df, aes(x = column, y = -log10(p_value))) +
+  geom_bar(stat = "identity", fill = "darkblue") +
+  geom_hline(yintercept = -log10(0.05), color = "firebrick", linetype = 2) +
+  labs(x = "PC", y = "P-value") +
+  theme_clean()
+
+
+```
+
+# Locate people with no phenotype
+```{r}
+fam <- read.table("data/GWAS_QC_rm_ibd_pc3.fam")
+height <- read.table("data/height.txt")
+
+phenotype <- left_join(fam, height, by = "V1")
+
+phenotype %>% 
+  filter(is.na(V2.y)) %>% 
+  select(c(V1, V2.x)) -> wrong_phenotype
+
+write.table(wrong_phenotype, file = "data/wrong_phenotype.txt", col.names = F, row.names = F)
+
+```
+
+# Merge phenotype
+```{r}
+fam <- read.table("data/GWAS_QC_rm_ibd_pc3_pheno.fam")
+height <- read.table("data/height.txt")
+
+pheno <- left_join(fam, height, by = "V1")
+
+write.table(pheno, file = "data/GWAS_QC_rm_ibd_pc3_pheno.fam", col.names = F, row.names = F)
+
+```
+# Male vs female height
+```{r}
+pheno %>% 
+  select(c(V1, V6)) %>% 
+  rename(IID = V1)-> pheno_simple
+
+metadata %>% 
+  select(c(IID, inferred_sex)) -> metadata_simple
+
+pheno_sex <- left_join(pheno_simple, metadata_simple)
+
+male_height <- pheno_sex %>% 
+  filter(inferred_sex == "Male")
+female_height <- pheno_sex %>% 
+  filter(inferred_sex == "Female")
+
+
+height_graph <- ggplot() +
+  geom_histogram(aes(female_height$V6, fill = female_height$inferred_sex),
+                 color = "black",
+                 linewidth = .2,
+                 alpha = .7,
+                 binwidth = 2.5) +
+  geom_histogram(aes(male_height$V6, fill = male_height$inferred_sex), 
+                 color = "black",
+                 linewidth = .2,
+                 alpha = .7,
+                 binwidth = 2.5) +
+  geom_vline(xintercept = mean(female_height$V6),
+             linetype = 2) +
+  geom_vline(xintercept = mean(male_height$V6),
+             linetype = 2) +
+  labs(x = "Height (cm)",
+       y = "Count",
+       fill = "Inferred sex") +
+  theme_clean(base_size = 15) +
+  theme(legend.background = element_rect(color = NA),
+        axis.title = element_text(size = 15)) +
+  scale_x_continuous(breaks = seq(from = 140, to = 205, by = 5)) +
+  scale_fill_manual(values = c("deeppink3", "darkturquoise")) +  
+  guides(fill = guide_legend(override.aes = list(alpha = .7))) +
+  annotate(geom = "segment", 
+           x = mean(female_height$V6), y = 65,
+           xend = mean(female_height$V6) - 10, yend = 63) +
+  geom_text(aes(x = mean(female_height$V6) - 14, y = 59,
+                label = paste("Mean female height:", "\n", round(mean(female_height$V6), 2), "cm", sep = " ")),
+            size = 5.5) +
+  annotate(geom = "segment",
+           x = mean(male_height$V6), y = 65,
+           xend = mean(male_height$V6) + 10, yend = 63) +
+  geom_text(aes(x = mean(male_height$V6) + 14, y = 59,
+                label = paste("Mean male height:", "\n", round(mean(male_height$V6), 2), "cm", sep = " ")),
+            size = 5.5) +
+  NULL
+
+ggsave(plot = height_graph, filename = "height_plot.png", dpi = 300, type = "cairo", width = 9, height = 6)
+```
+
+
+# QQ / Manhattan
+```{r}
+library(qqman)
+library(grid)
+library(gridGraphics)
+
+d <- read.table("data/gwa.qassoc", head = T)
+d_a <- read.table("data/gwa.qassoc.adjusted", head = T)
+
+d_a %>% 
+  select(c(SNP, BONF)) -> d_a
+
+d_c <- left_join(d, d_a, by = "SNP")
+d_c %>% 
+  na.omit() -> d_c
+
+manhattan(d_c, annotatePval = 5e-8)
+p <- recordPlot()
+g <- grid.grabExpr(grid.echo(p))
+ggsave(filename = "manh_prePC_adjust.png", plot = g, dpi = 300, type = "cairo", width = 9, height = 6)
+
+
+qq(d_c$P)
+p <- recordPlot()
+g <- grid.grabExpr(grid.echo(p))
+ggsave(filename = "qq_prePC_adjust.png", plot = g, dpi = 300, type = "cairo", width = 9, height = 6)
 
 ```
 
 
 ```{r}
-height <- read.table("data/height.txt", header = F)
+lin <- read.table("data/plink.assoc.linear", head = T)
+
+# SNPs identified from manhattan plot as being significant, even though no close SNPs show elevated P-values
+snps <- c("rs12734338", "rs116358832", "rs6917603", "rs7329280", "rs3883013", "rs1084422", "rs12734001")
+
+lin %>% 
+  filter(TEST == "ADD") %>%
+  filter(!(SNP %in% snps)) %>% 
+  na.omit() -> lin
+
+manhattan(lin, annotatePval = 1e-5)
+p <- recordPlot()
+g <- grid.grabExpr(grid.echo(p))
+ggsave(filename = "manh_postPC_adjust.png", plot = g, dpi = 300, type = "cairo", width = 9, height = 6)
+
+qq(lin$P)
+p <- recordPlot()
+g <- grid.grabExpr(grid.echo(p))
+ggsave(filename = "qq_postPC_adjust.png", plot = g, dpi = 300, type = "cairo", width = 9, height = 6)
 ```
+
+
+
+
+
+
+
+
+
+
+
 
 
 
